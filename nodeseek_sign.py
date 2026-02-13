@@ -294,8 +294,52 @@ def session_login(user, password, solver_type, api_base_url, client_key):
         'accept-language': "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         'Content-Type': "application/json"
     }
+    
+    # CloudFlare阻拦时尝试的指纹列表
+    cf_retry_fingerprints = [
+        "chrome99", "chrome100", "chrome101", "chrome104", "chrome107", 
+        "chrome110", "chrome116", "chrome119", "chrome120", "chrome123", 
+        "chrome124", "chrome131", "chrome133a", "chrome136"
+    ]
+    
     try:
         response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers)
+        
+        # 如果遇到CloudFlare阻拦,进行指纹轮换重试
+        if response.status_code == 403 and _is_cloudflare_challenge(response.text):
+            print(f"[INFO] 登录时检测到CloudFlare阻拦,开始轮流尝试不同指纹...")
+            
+            for fingerprint in cf_retry_fingerprints:
+                print(f"[INFO] 等待60秒后使用指纹 {fingerprint} 重试登录...")
+                time.sleep(60)  # 重试间隔1分钟
+                
+                try:
+                    print(f"[INFO] 正在使用指纹 {fingerprint} 进行登录...")
+                    # 创建新session并重新获取页面
+                    session = requests.Session(impersonate=fingerprint)
+                    session.get("https://www.nodeseek.com/signIn.html")
+                    
+                    response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers)
+                    
+                    # 检查是否成功绕过CloudFlare
+                    if response.status_code != 403:
+                        print(f"[SUCCESS] 使用指纹 {fingerprint} 成功绕过CloudFlare!")
+                        break
+                    elif not _is_cloudflare_challenge(response.text):
+                        # 403但不是CloudFlare挑战页
+                        print(f"[INFO] 使用指纹 {fingerprint} 收到非CloudFlare的403响应")
+                        break
+                    else:
+                        print(f"[WARN] 指纹 {fingerprint} 仍被CloudFlare阻拦,继续尝试下一个...")
+                        
+                except Exception as e:
+                    print(f"[ERROR] 使用指纹 {fingerprint} 登录请求异常: {e}")
+                    continue
+            else:
+                # 所有指纹都尝试失败
+                print(f"[FAIL] 所有指纹尝试完毕,登录仍被CloudFlare阻拦")
+                return None
+        
         resp_json = response.json()
         if resp_json.get("success"):
             cookies = session.cookies.get_dict()
@@ -319,13 +363,30 @@ def _is_cloudflare_challenge(text: str) -> bool:
 def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, json_data=None, timeout: int = 25):
     last_resp = None
     last_err = None
-    # 优先尝试 IMPERSONATE_VERSION，然后尝试 IMPERSONATE_CANDIDATES（去重）
-    ordered_candidates = [IMPERSONATE_VERSION] + [v for v in IMPERSONATE_CANDIDATES if v != IMPERSONATE_VERSION]
-    for ver in ordered_candidates:
+    
+    # CloudFlare阻拦时尝试的指纹列表
+    cf_retry_fingerprints = [
+        "chrome99", "chrome100", "chrome101", "chrome104", "chrome107", 
+        "chrome110", "chrome116", "chrome119", "chrome120", "chrome123", 
+        "chrome124", "chrome131", "chrome133a", "chrome136"
+    ]
+    
+    # 首先尝试使用环境变量配置的版本
+    ordered_candidates = [IMPERSONATE_VERSION] if IMPERSONATE_VERSION not in cf_retry_fingerprints else []
+    ordered_candidates.extend(cf_retry_fingerprints)
+    
+    for idx, ver in enumerate(ordered_candidates):
         try:
+            # 如果不是第一次尝试且之前遇到了CloudFlare阻拦,等待60秒
+            if idx > 0 and last_resp and last_resp.status_code == 403 and _is_cloudflare_challenge(last_resp.text):
+                print(f"[INFO] 等待60秒后使用指纹 {ver} 重试...")
+                time.sleep(60)
+            
             resp = requests.request(method, url, headers=headers, json=json_data, impersonate=ver, timeout=timeout)
             last_resp = resp
             if resp.status_code != 403:
+                if idx > 0:
+                    print(f"[SUCCESS] 使用指纹 {ver} 成功!")
                 return resp, ver, None
             # 403：如果是 Cloudflare 挑战页特征，则尝试下一个指纹版本继续重试
             if _is_cloudflare_challenge(resp.text):
@@ -351,20 +412,74 @@ def sign(ns_cookie, ns_random):
         'Content-Type': 'application/json',
         'Cookie': ns_cookie
     }
+    
+    # CloudFlare阻拦时尝试的指纹列表
+    cf_retry_fingerprints = [
+        "chrome99", "chrome100", "chrome101", "chrome104", "chrome107", 
+        "chrome110", "chrome116", "chrome119", "chrome120", "chrome123", 
+        "chrome124", "chrome131", "chrome133a", "chrome136"
+    ]
+    
     try:
         url = f"https://www.nodeseek.com/api/attendance?random={ns_random}"
+        
+        # 首次尝试使用默认配置
         response, used_impersonate, req_err = _request_with_impersonate_fallback(
             "POST", url, headers=headers, json_data={}, timeout=25
         )
+        
+        # 如果遇到CloudFlare阻拦,进行指纹轮换重试
+        if response and response.status_code == 403 and _is_cloudflare_challenge(response.text):
+            print(f"[INFO] 检测到CloudFlare阻拦,开始轮流尝试不同指纹...")
+            
+            for fingerprint in cf_retry_fingerprints:
+                print(f"[INFO] 等待60秒后使用指纹 {fingerprint} 重试...")
+                time.sleep(60)  # 重试间隔1分钟
+                
+                try:
+                    print(f"[INFO] 正在使用指纹 {fingerprint} 进行签到...")
+                    response = requests.request(
+                        "POST", url, 
+                        headers=headers, 
+                        json={}, 
+                        impersonate=fingerprint, 
+                        timeout=25
+                    )
+                    
+                    # 检查是否成功绕过CloudFlare
+                    if response.status_code != 403:
+                        print(f"[SUCCESS] 使用指纹 {fingerprint} 成功绕过CloudFlare!")
+                        used_impersonate = fingerprint
+                        req_err = None
+                        break
+                    elif not _is_cloudflare_challenge(response.text):
+                        # 403但不是CloudFlare挑战页
+                        print(f"[INFO] 使用指纹 {fingerprint} 收到非CloudFlare的403响应")
+                        used_impersonate = fingerprint
+                        req_err = None
+                        break
+                    else:
+                        print(f"[WARN] 指纹 {fingerprint} 仍被CloudFlare阻拦,继续尝试下一个...")
+                        
+                except Exception as e:
+                    print(f"[ERROR] 使用指纹 {fingerprint} 请求异常: {e}")
+                    continue
+            else:
+                # 所有指纹都尝试失败
+                print(f"[FAIL] 所有指纹尝试完毕,仍被CloudFlare阻拦")
+                return "forbidden", f"403 Cloudflare challenge (已尝试所有指纹)"
+        
+        # 处理请求结果
         if req_err is not None:
             return "error", f"请求异常: {req_err}"
         if response is None:
             return "error", "请求失败：无响应"
         if response.status_code == 403:
-            # 仍然被拦截
+            # 非CloudFlare的403
             if _is_cloudflare_challenge(response.text):
                 return "forbidden", f"403 Cloudflare challenge (最后尝试 impersonate={used_impersonate})"
             return "forbidden", f"403 Forbidden (impersonate={used_impersonate})"
+        
         data = response.json()
         msg = data.get("message", "")
         if "鸡腿" in msg or data.get("success"):
