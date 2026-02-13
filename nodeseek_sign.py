@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from curl_cffi import requests
 from yescaptcha import YesCaptchaSolver, YesCaptchaSolverError
 from turnstile_solver import TurnstileSolver, TurnstileSolverError
+
+# 强制实时输出日志
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
 
 def _get_env_str(name: str, default: str = "") -> str:
     """读取环境变量并去掉空白；若为空字符串则回退 default。"""
@@ -310,11 +314,13 @@ def session_login(user, password, solver_type, api_base_url, client_key):
             print(f"[INFO] 登录时检测到CloudFlare阻拦,开始轮流尝试不同指纹...")
             
             for fingerprint in cf_retry_fingerprints:
-                print(f"[INFO] 等待60秒后使用指纹 {fingerprint} 重试登录...")
-                time.sleep(60)  # 重试间隔1分钟
+                print(f"[INFO] 等待10秒后使用指纹 {fingerprint} 重试登录...")
+                sys.stdout.flush()  # 强制刷新输出
+                time.sleep(10)  # 重试间隔10秒
                 
                 try:
                     print(f"[INFO] 正在使用指纹 {fingerprint} 进行登录...")
+                    sys.stdout.flush()  # 强制刷新输出
                     # 创建新session并重新获取页面
                     session = requests.Session(impersonate=fingerprint)
                     session.get("https://www.nodeseek.com/signIn.html")
@@ -324,16 +330,20 @@ def session_login(user, password, solver_type, api_base_url, client_key):
                     # 检查是否成功绕过CloudFlare
                     if response.status_code != 403:
                         print(f"[SUCCESS] 使用指纹 {fingerprint} 成功绕过CloudFlare!")
+                        sys.stdout.flush()  # 强制刷新输出
                         break
                     elif not _is_cloudflare_challenge(response.text):
                         # 403但不是CloudFlare挑战页
                         print(f"[INFO] 使用指纹 {fingerprint} 收到非CloudFlare的403响应")
+                        sys.stdout.flush()  # 强制刷新输出
                         break
                     else:
                         print(f"[WARN] 指纹 {fingerprint} 仍被CloudFlare阻拦,继续尝试下一个...")
+                        sys.stdout.flush()  # 强制刷新输出
                         
                 except Exception as e:
                     print(f"[ERROR] 使用指纹 {fingerprint} 登录请求异常: {e}")
+                    sys.stdout.flush()  # 强制刷新输出
                     continue
             else:
                 # 所有指纹都尝试失败
@@ -377,26 +387,30 @@ def _request_with_impersonate_fallback(method: str, url: str, *, headers: dict, 
     
     for idx, ver in enumerate(ordered_candidates):
         try:
-            # 如果不是第一次尝试且之前遇到了CloudFlare阻拦,等待60秒
+            # 如果不是第一次尝试且之前遇到了CloudFlare阻拦,等待10秒
             if idx > 0 and last_resp and last_resp.status_code == 403 and _is_cloudflare_challenge(last_resp.text):
-                print(f"[INFO] 等待60秒后使用指纹 {ver} 重试...")
-                time.sleep(60)
+                print(f"[INFO] 等待10秒后使用指纹 {ver} 重试...")
+                sys.stdout.flush()  # 强制刷新输出
+                time.sleep(10)
             
             resp = requests.request(method, url, headers=headers, json=json_data, impersonate=ver, timeout=timeout)
             last_resp = resp
             if resp.status_code != 403:
                 if idx > 0:
                     print(f"[SUCCESS] 使用指纹 {ver} 成功!")
+                    sys.stdout.flush()  # 强制刷新输出
                 return resp, ver, None
             # 403：如果是 Cloudflare 挑战页特征，则尝试下一个指纹版本继续重试
             if _is_cloudflare_challenge(resp.text):
                 print(f"[WARN] 403 Cloudflare challenge (impersonate={ver})，尝试切换指纹...")
+                sys.stdout.flush()  # 强制刷新输出
                 continue
             # 非挑战页 403，直接返回响应
             return resp, ver, None
         except Exception as e:
             last_err = e
             print(f"[WARN] 请求异常 (impersonate={ver}): {e}")
+            sys.stdout.flush()  # 强制刷新输出
             continue
     # 所有候选都试过后返回最后一次响应或错误，并把最后尝试的指纹返回给调用方
     return last_resp, (ordered_candidates[-1] if ordered_candidates else IMPERSONATE_VERSION), last_err
@@ -431,13 +445,16 @@ def sign(ns_cookie, ns_random):
         # 如果遇到CloudFlare阻拦,进行指纹轮换重试
         if response and response.status_code == 403 and _is_cloudflare_challenge(response.text):
             print(f"[INFO] 检测到CloudFlare阻拦,开始轮流尝试不同指纹...")
+            sys.stdout.flush()  # 强制刷新输出
             
             for fingerprint in cf_retry_fingerprints:
-                print(f"[INFO] 等待60秒后使用指纹 {fingerprint} 重试...")
-                time.sleep(60)  # 重试间隔1分钟
+                print(f"[INFO] 等待10秒后使用指纹 {fingerprint} 重试...")
+                sys.stdout.flush()  # 强制刷新输出
+                time.sleep(10)  # 重试间隔10秒
                 
                 try:
                     print(f"[INFO] 正在使用指纹 {fingerprint} 进行签到...")
+                    sys.stdout.flush()  # 强制刷新输出
                     response = requests.request(
                         "POST", url, 
                         headers=headers, 
@@ -449,20 +466,24 @@ def sign(ns_cookie, ns_random):
                     # 检查是否成功绕过CloudFlare
                     if response.status_code != 403:
                         print(f"[SUCCESS] 使用指纹 {fingerprint} 成功绕过CloudFlare!")
+                        sys.stdout.flush()  # 强制刷新输出
                         used_impersonate = fingerprint
                         req_err = None
                         break
                     elif not _is_cloudflare_challenge(response.text):
                         # 403但不是CloudFlare挑战页
                         print(f"[INFO] 使用指纹 {fingerprint} 收到非CloudFlare的403响应")
+                        sys.stdout.flush()  # 强制刷新输出
                         used_impersonate = fingerprint
                         req_err = None
                         break
                     else:
                         print(f"[WARN] 指纹 {fingerprint} 仍被CloudFlare阻拦,继续尝试下一个...")
+                        sys.stdout.flush()  # 强制刷新输出
                         
                 except Exception as e:
                     print(f"[ERROR] 使用指纹 {fingerprint} 请求异常: {e}")
+                    sys.stdout.flush()  # 强制刷新输出
                     continue
             else:
                 # 所有指纹都尝试失败

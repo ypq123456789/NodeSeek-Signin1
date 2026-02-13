@@ -23,8 +23,8 @@ def test_cloudflare_retry_logic():
     print(f"  版本列表: {', '.join(cf_retry_fingerprints)}")
     
     # 测试重试间隔
-    retry_interval = 60
-    print(f"\n✓ 重试间隔: {retry_interval} 秒 (1分钟)")
+    retry_interval = 10
+    print(f"\n✓ 重试间隔: {retry_interval} 秒")
     
     # 估算最大重试时间
     max_retry_time = len(cf_retry_fingerprints) * retry_interval
@@ -63,11 +63,12 @@ def test_cloudflare_retry_logic():
         "✓ 签到函数支持 CloudFlare 重试",
         "✓ 登录函数支持 CloudFlare 重试",
         "✓ 通用请求函数支持 CloudFlare 重试",
-        "✓ 重试间隔: 60秒",
+        "✓ 重试间隔: 10秒",
         "✓ 指纹数量: 14个 Chrome 版本",
         "✓ 智能检测 CloudFlare 挑战页",
         "✓ 成功绕过后立即执行操作",
         "✓ 支持环境变量 NS_IMPERSONATE 优先级",
+        "✓ 实时输出日志",
     ]
     
     for feature in features:
